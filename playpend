@@ -1,0 +1,304 @@
+#!/Users/ark3/datawire/telepresence/virtualenv/bin/python3
+
+import json
+import os
+from socketserver import StreamRequestHandler, ThreadingUnixStreamServer
+from ssl import SSLContext
+from subprocess import CalledProcessError, Popen
+from threading import Thread
+from time import sleep
+from typing import Any, Callable, Dict, List, Optional
+from urllib.request import urlopen
+
+from telepresence.runner import Runner
+
+
+class State:
+    @classmethod
+    def as_dict(cls):
+        res = {}
+        for key, value in cls.__dict__.items():
+            if key.startswith("__"):
+                continue
+            try:
+                json.dumps(value)
+            except TypeError:
+                continue
+            res[key] = value
+        return res
+
+    network_ok = False
+    cluster_ok = False
+    bridge_ok = False
+
+    cluster_info = None  # type: Optional[Dict[str, Any]]
+    bridge_process = None  # type: Optional[Popen]
+    intercepts = []  # type: List[Any]
+
+
+def loop_in_background(
+    runner: Runner,
+    name: str,
+    function: Callable,
+    more_args: Optional[List[Any]] = None,
+    break_time=5,
+) -> Thread:
+    def loop():
+        runner.write(f"Background thread {name} starting...")
+        try:
+            while True:
+                function(runner, *(more_args if more_args is not None else []))
+                sleep(break_time)
+        finally:
+            runner.write(f"FAIULRE: {name} thread ending!")
+
+    th = Thread(target=loop, daemon=True)
+    th.start()
+    return th
+
+
+def notify(runner: Runner, message: str, details="") -> None:
+    runner.write(message)
+    assert '"' not in message, message
+    my_name = "(PlaypenD)"
+    script = f'display notification "{{}}" with title "{message}"'
+    if details:
+        script += f" subtitle {my_name}"
+        script = script.format(details)
+        runner.write(details)
+    else:
+        script = script.format(my_name)
+    if runner.platform == "darwin":
+        runner.check_call(["osascript", "-e", script])
+
+
+def update_maybe_notify(runner: Runner, attrib: str, curr_value: Any) -> bool:
+    name = attrib.capitalize()
+    attrib = attrib + "_ok"
+    state_value = getattr(State, attrib)
+    if curr_value != state_value:
+        notify(runner, f"{name} {state_value} --> {curr_value}")
+        setattr(State, attrib, curr_value)
+        return True
+    return False
+
+
+def as_user(cluster=None):
+    if cluster is None:
+        cluster = State.cluster_info
+    user = cluster["user"]
+    env = cluster["env"]
+    sudo_cmd = ["sudo", f"--user={user}", "--set-home", "--preserve-env"]
+    return sudo_cmd, env
+
+
+def run_as_user_sync(runner: Runner, args: List[str], cluster=None) -> None:
+    sudo_cmd, env = as_user(cluster)
+    runner.check_call(sudo_cmd + args, env=env)
+
+
+def capture_as_user(runner: Runner, args: List[str], cluster=None) -> str:
+    sudo_cmd, env = as_user(cluster)
+    return runner.get_output(sudo_cmd + args, env=env)
+
+
+def run_as_user_async(runner: Runner, args: List[str], cluster=None) -> Popen:
+    sudo_cmd, env = as_user(cluster)
+    name = f"{args[0]} as user"
+    process = runner.launch(name, sudo_cmd + args, is_critical=False, env=env)
+    return process
+
+
+# teleproxy
+
+teleproxy = "/Users/ark3/datawire/ambassador/venv/bin/teleproxy"
+
+
+def nuke_dns_cache(runner: Runner) -> None:
+    if runner.platform == "darwin":
+        try:
+            runner.check_call(["killall", "-HUP", "mDNSResponder"])
+        except CalledProcessError:
+            pass
+
+
+def launch_teleproxy_intercept(runner: Runner) -> None:
+    nuke_dns_cache(runner)
+    try:
+        runner.check_call([teleproxy, "-mode", "intercept"])
+    except CalledProcessError:
+        pass
+
+
+def check_teleproxy_intercept(runner: Runner) -> bool:
+    try:
+        with urlopen("http://teleproxy/api/tables/", timeout=2.0) as fd:
+            fd.read()
+        curr = True
+    except OSError as exc:
+        runner.write(f"Intercept check failed: {exc}")
+        nuke_dns_cache(runner)
+        curr = False
+    update_maybe_notify(runner, "network", curr)
+    return curr
+
+
+def launch_teleproxy_bridge(runner: Runner):
+    """Launch the bridge"""
+    try:
+        return run_as_user_async(runner, [teleproxy, "-mode", "bridge"])
+    except CalledProcessError:
+        pass
+
+
+def check_teleproxy_bridge(runner: Runner) -> bool:
+    """Verify connectivity via proxy"""
+    if State.cluster_info is None:
+        curr = False
+    else:
+        insecure_context = SSLContext()
+        try:
+            with urlopen(
+                "https://kubernetes/api/",
+                timeout=5.0,
+                context=insecure_context,
+            ) as fd:
+                fd.read()
+            curr = True
+        except OSError as exc:
+            runner.write(f"Bridge check failed: {exc}")
+            curr = False
+    update_maybe_notify(runner, "bridge", curr)
+    return curr
+
+
+def check_cluster(runner: Runner) -> bool:
+    """Verify k8s cluster is okay"""
+    if State.cluster_info is None:
+        curr = False
+    elif State.bridge_ok:
+        curr = True
+    else:
+        kcheck = ["kubectl", "get", "pod", "ohai", "--ignore-not-found"]
+        try:
+            run_as_user_sync(runner, kcheck)
+            curr = True
+        except CalledProcessError:
+            curr = False
+    update_maybe_notify(runner, "cluster", curr)
+    return curr
+
+
+def perform_checks(runner: Runner) -> None:
+    check_teleproxy_intercept(runner)
+    check_teleproxy_bridge(runner)
+    check_cluster(runner)
+
+
+# PlaypenD server
+
+
+class PlaypenDServer(ThreadingUnixStreamServer):
+    def server_activate(self):
+        os.chmod(self.server_address, 0o777)
+        super().server_activate()
+
+
+class PlaypenDRequestHandler(StreamRequestHandler):
+    show = print
+    write = print
+    runner: Optional[Runner] = None
+
+    def setup(self):
+        self.connection = self.request
+        self.rfile = self.connection.makefile("r", 1)
+        self.wfile = self.connection.makefile("w", 1)
+
+    def handle(self):
+        req = json.load(self.rfile)
+        command = req.get("command", "(unspecified)")
+        self.write(f"Request: {command}")
+        try:
+            method = getattr(self, command)
+        except AttributeError:
+            res = {"error": f"unknown command: {command}"}
+        else:
+            res = method(req)
+        json.dump(res, self.wfile)
+
+    def res_error(self, message: str) -> Dict[str, str]:
+        return dict(error=message)
+
+    def status(self, req) -> Dict[str, str]:
+        return State.as_dict()
+
+    def connect(self, req) -> Dict[str, str]:
+        assert self.runner is not None
+        if State.cluster_info is not None:
+            return dict(error="Already connected")
+        if State.bridge_process is not None:
+            return dict(error="Not ready: Trying to disconnect")
+        if not State.network_ok:
+            return dict(error="Not ready: Establishing network overrides")
+        State.cluster_info = req
+        if not check_cluster(self.runner):
+            State.cluster_info = None
+            return dict(error="Unable to talk to cluster")
+        try:
+            State.cluster_info["context"] = capture_as_user(
+                self.runner, ["kubectl", "config", "current-context"]
+            )
+            State.cluster_info["server"] = capture_as_user(
+                self.runner, [
+                    "kubectl", "config", "view", "--minify", "-o",
+                    "jsonpath={.clusters[0].cluster.server}"
+                ]
+            )
+        except CalledProcessError as exc:
+            State.cluster_info = None
+            return dict(error=f"Unable to talk to cluster: {exc}")
+        State.bridge_process = launch_teleproxy_bridge(self.runner)
+        return self.status(None)
+
+    def disconnect(self, req) -> Dict[str, str]:
+        assert self.runner is not None
+        if State.cluster_info is None:
+            return dict(error="Not connected")
+        # FIXME: Disconnect all intercepts
+        if State.bridge_process is not None:
+            State.bridge_process.terminate()
+            State.bridge_process = None
+        State.cluster_info = None
+        check_cluster(self.runner)
+        return self.status(None)
+
+
+def main():
+    if os.geteuid() != 0:
+        exit("Playpen Daemon must run as root.")
+
+    runner = Runner("-", None, True)
+    sockname = "/tmp/playpen"
+    runner.add_cleanup("remove socket", os.unlink, sockname)
+    PlaypenDRequestHandler.show = runner.show
+    PlaypenDRequestHandler.write = runner.write
+    PlaypenDRequestHandler.runner = runner
+
+    with runner.cleanup_handling():
+        # Intercept runs all the time
+        loop_in_background(
+            runner, "Teleproxy Intercept", launch_teleproxy_intercept
+        )
+        # Status checks (and notifications) run all the time
+        loop_in_background(runner, "Periodic Status Checks", perform_checks)
+
+        try:
+            with PlaypenDServer(sockname, PlaypenDRequestHandler) as server:
+                runner.show("PlaypenD starting...")
+                server.serve_forever()
+        except KeyboardInterrupt:
+            runner.show("Interrupted.")
+
+
+if __name__ == "__main__":
+    main()

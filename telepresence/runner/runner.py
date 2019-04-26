@@ -451,11 +451,12 @@ class Runner(object):
         name: str,
         args: typing.List[str],
         killer: typing.Callable[[], None] = None,
+        env: typing.Dict[str, str] = None,
         notify: bool = False,
         keep_session: bool = False,
         bufsize: int = -1,
         is_critical: bool = True,
-    ) -> None:
+    ) -> Popen:
         """Asyncrounously run a process.
 
         :param name: A human-friendly name to describe the process.
@@ -510,7 +511,8 @@ class Runner(object):
         self.output.write(
             "[{}] Launching {}: {}".format(track, name, str_command(args))
         )
-        env = os.environ.copy()
+        if env is None:
+            env = os.environ.copy()
         if notify:
             sockname = str(self.temp / "notify-{}".format(track))
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -562,6 +564,8 @@ class Runner(object):
 
             os.close(pr)
             sock.close()
+
+        return process
 
     # Cleanup
 
