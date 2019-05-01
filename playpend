@@ -278,7 +278,7 @@ def main():
         exit("Playpen Daemon must run as root.")
 
     runner = Runner("-", None, True)
-    sockname = "/tmp/playpen"
+    sockname = "/var/run/playpen.socket"
     runner.add_cleanup("remove socket", os.unlink, sockname)
     PlaypenDRequestHandler.show = runner.show
     PlaypenDRequestHandler.write = runner.write

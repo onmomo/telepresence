@@ -11,7 +11,12 @@ def transact(command, **info):
     info["command"] = command.strip()
 
     sock = socket.socket(socket.AF_UNIX)
-    sock.connect("/tmp/playpen")
+    sockname = "/var/run/playpen.socket"
+    try:
+        sock.connect(sockname)
+    except FileNotFoundError as exc:
+        print(f"Connect to {sockname} failed: {exc}")
+        exit("Could not connect to PlaypenD. Is it running?")
 
     out = sock.makefile(mode="w", buffering=1, encoding="utf8")
     json.dump(info, out, indent=2)
