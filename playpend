@@ -2,7 +2,7 @@
 
 import json
 import os
-from socketserver import StreamRequestHandler, ThreadingUnixStreamServer
+from socketserver import BaseRequestHandler, ThreadingUnixStreamServer
 from ssl import SSLContext
 from subprocess import CalledProcessError, Popen
 from threading import Thread
@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.request import urlopen
 
 from telepresence.runner import Runner
+from telepresence.utilities import str_command
 
 
 class State:
@@ -33,7 +34,18 @@ class State:
 
     cluster_info = None  # type: Optional[Dict[str, Any]]
     bridge_process = None  # type: Optional[Popen]
+    interceptable = []  # type: List[Any]
     intercepts = []  # type: List[Any]
+
+
+def render_fail(exc: CalledProcessError) -> str:
+    res = f"Command failed:\n    {str_command(exc.cmd)}\n"
+    res += f"  with exit code {exc.returncode}\n"
+    if exc.stdout:
+        res += f"  Output was:\n    {exc.stdout.strip()}\n"
+    if exc.stderr:
+        res += f"  Output was:\n    {exc.stderr.strip()}\n"
+    return res
 
 
 def loop_in_background(
@@ -204,51 +216,78 @@ class PlaypenDServer(ThreadingUnixStreamServer):
         super().server_activate()
 
 
-class PlaypenDRequestHandler(StreamRequestHandler):
-    show = print
-    write = print
-    runner: Optional[Runner] = None
-
+class PlaypenDRequestHandler(BaseRequestHandler):
     def setup(self):
-        self.connection = self.request
-        self.rfile = self.connection.makefile("r", 1)
-        self.wfile = self.connection.makefile("w", 1)
+        self.runner = self.server.runner  # type: Runner
+
+    def send(self, line: str) -> None:
+        message = (line.rstrip() + "\n").encode("utf8")
+        self.request.sendall(message)
+
+    def fail(self, message: str) -> int:
+        self.send(f"playpen: {message}")
+        return 1
 
     def handle(self):
-        req = json.load(self.rfile)
-        command = req.get("command", "(unspecified)")
-        self.write(f"Request: {command}")
+        in_file = self.request.makefile("r")
+        req = json.load(in_file)
+        in_file.close()
+
+        args = req.get("args", [])
+        if args:
+            command = args[0]
+        else:
+            command = "status"
+        self.runner.write(f"Request: {command}")
+
         try:
             method = getattr(self, command)
         except AttributeError:
-            res = {"error": f"unknown command: {command}"}
+            code = self.fail(f"unknown command: {command}")
         else:
-            res = method(req)
-        json.dump(res, self.wfile)
+            code = method(req)
+        self.send(f"-- exit {code}")
 
-    def res_error(self, message: str) -> Dict[str, str]:
-        return dict(error=message)
-
-    def status(self, req) -> Dict[str, str]:
-        return State.as_dict()
-
-    def connect(self, req) -> Dict[str, str]:
-        assert self.runner is not None
-        if State.cluster_info is not None:
-            return dict(error="Already connected")
-        if State.bridge_process is not None:
-            return dict(error="Not ready: Trying to disconnect")
+    def status(self, req) -> int:
         if not State.network_ok:
-            return dict(error="Not ready: Establishing network overrides")
+            self.send("Network overrides NOT established")
+        if not State.cluster_info:
+            self.send("Not connected")
+            return 0
+        if State.cluster_ok:
+            self.send("Connected")
+        else:
+            self.send("Attempting to reconnect...")
+        context = State.cluster_info["context"]
+        server = State.cluster_info["server"]
+        if State.bridge_ok:
+            proxy = "ON (networking to the cluster is enabled)"
+        else:
+            proxy = "OFF (attempting to connect...)"
+        self.send(
+            f"  Context:       {context} ({server})\n"
+            f"  Proxy:         {proxy}\n"
+            f"  Interceptable: {len(State.interceptable)} deployments\n"
+            f"  Intercepts:    ? total, {len(State.intercepts)} local\n"
+        )
+        return 0
+
+    def connect(self, req) -> int:
+        if State.cluster_info is not None:
+            return self.fail("Already connected")
+        if State.bridge_process is not None:
+            return self.fail("Not ready: Trying to disconnect")
+        if not State.network_ok:
+            return self.fail("Not ready: Establishing network overrides")
         State.cluster_info = req
         if not check_cluster(self.runner):
             State.cluster_info = None
-            return dict(error="Unable to talk to cluster")
+            return self.fail("Unable to talk to cluster")
         try:
-            State.cluster_info["context"] = capture_as_user(
+            ctx = State.cluster_info["context"] = capture_as_user(
                 self.runner, ["kubectl", "config", "current-context"]
             )
-            State.cluster_info["server"] = capture_as_user(
+            srv = State.cluster_info["server"] = capture_as_user(
                 self.runner, [
                     "kubectl", "config", "view", "--minify", "-o",
                     "jsonpath={.clusters[0].cluster.server}"
@@ -256,21 +295,24 @@ class PlaypenDRequestHandler(StreamRequestHandler):
             )
         except CalledProcessError as exc:
             State.cluster_info = None
-            return dict(error=f"Unable to talk to cluster: {exc}")
+            self.send(render_fail(exc))
+            return self.fail("Unable to talk to cluster")
         State.bridge_process = launch_teleproxy_bridge(self.runner)
-        return self.status(None)
+        self.send(f"Connected to context {ctx} ({srv})")
+        return 0
 
-    def disconnect(self, req) -> Dict[str, str]:
+    def disconnect(self, req) -> int:
         assert self.runner is not None
         if State.cluster_info is None:
-            return dict(error="Not connected")
+            return self.fail("Not connected")
         # FIXME: Disconnect all intercepts
         if State.bridge_process is not None:
             State.bridge_process.terminate()
             State.bridge_process = None
         State.cluster_info = None
         check_cluster(self.runner)
-        return self.status(None)
+        self.send("Disconnected")
+        return 0
 
 
 def main():
@@ -294,6 +336,7 @@ def main():
 
         try:
             with PlaypenDServer(sockname, PlaypenDRequestHandler) as server:
+                server.runner = runner
                 runner.show("PlaypenD starting...")
                 server.serve_forever()
         except KeyboardInterrupt:

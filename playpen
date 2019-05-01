@@ -7,104 +7,37 @@ import socket
 import sys
 
 
-def transact(command, **info):
-    info["command"] = command.strip()
-
+def main():
+    # Connect
     sock = socket.socket(socket.AF_UNIX)
     sockname = "/var/run/playpen.socket"
     try:
         sock.connect(sockname)
     except FileNotFoundError as exc:
         print(f"Connect to {sockname} failed: {exc}")
-        exit("Could not connect to PlaypenD. Is it running?")
+        exit("playpen: Could not connect to PlaypenD. Is it running?")
 
+    # Send request
+    request = dict(env=dict(os.environ), user=getuser(), args=sys.argv[1:])
     out = sock.makefile(mode="w", buffering=1, encoding="utf8")
-    json.dump(info, out, indent=2)
+    json.dump(request, out, indent=2)
     out.close()
     sock.shutdown(socket.SHUT_WR)
 
-    in_ = sock.makefile(mode="r", buffering=1, encoding="utf8")
-    try:
-        res = json.load(in_)
-    except ValueError as exc:
-        exit(f"Failure: Bad response from server ({exc})")
+    # Display response as it comes in
+    token = "-- exit "
+    in_ = sock.makefile(mode="r", encoding="utf8")
+    for line in in_:
+        if line.startswith(token):
+            code_str = line.rstrip()[len(token):]
+            try:
+                code = int(code_str)
+            except ValueError:
+                code = f"Bad exit code from server: {repr(code_str)}"
+            exit(code)
+        print(line.rstrip())
     in_.close()
-
     sock.close()
-
-    if "error" in res:
-        exit(f"Error: {res['error']}")
-    return res
-
-
-class Status:
-    pass
-
-
-def unmarshal_status(response):
-    status = Status()
-    response.setdefault("interceptable", [])
-    response.setdefault("intercepts", [])
-    if response.get("cluster_info") is None:
-        response["cluster_info"] = {}
-    for key, value in response.items():
-        setattr(status, key, value)
-    status.context = status.cluster_info.get("context", "Unknown")
-    status.server = status.cluster_info.get("server", "Unknown")
-    return status
-
-
-def do_status(args):
-    res = transact("status")
-    status = unmarshal_status(res)
-    if not status.network_ok:
-        print("Network overrides NOT established")
-    if status.cluster_info:
-        if status.cluster_ok:
-            print("Connected")
-        else:
-            print("Attempting to reconnect...")
-        print(f"  Context:       {status.context} ({status.server})")
-        if status.bridge_ok:
-            print("  Proxy:         ON (networking to the cluster is enabled)")
-        else:
-            print("  Proxy:         OFF (attempting to connect...)")
-        print(f"  Interceptable: {len(status.interceptable)} deployments")
-        print(f"  Intercepts:    ? total, {len(status.intercepts)} local")
-    else:
-        print("Not connected")
-
-
-def do_connect(args):
-    env = {}
-    env.update(os.environ)
-    res = transact("connect", env=env, user=getuser())
-    status = unmarshal_status(res)
-    if status.cluster_ok:
-        print("Connected")
-    else:
-        print("???")
-
-
-def do_disconnect(args):
-    res = transact("disconnect")
-    status = unmarshal_status(res)
-    if not status.cluster_ok:
-        print("Disconnected")
-    else:
-        print("???")
-
-
-def main():
-    try:
-        command = sys.argv[1]
-    except IndexError:
-        command = "status"
-    try:
-        func = globals()["do_" + command]
-    except KeyError:
-        exit("playpen: unknown command: {}".format(command))
-    func(sys.argv[2:])
 
 
 if __name__ == "__main__":
