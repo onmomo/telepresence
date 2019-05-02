@@ -386,7 +386,7 @@ def main():
 
     global teleproxy
     my_dir = Path(TELEPRESENCE_BINARY).parent
-    proxy_name = f"teleproxy-{runner.platform}-amd64"
+    proxy_name = f"pp-teleproxy-{runner.platform}-amd64"
     teleproxy = str(my_dir / proxy_name)
     runner.require([teleproxy], "Perhaps try reinstalling Playpen")
 
