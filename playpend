@@ -2,18 +2,22 @@
 
 import json
 import os
+import socket
+from pathlib import Path
 from socketserver import BaseRequestHandler, ThreadingUnixStreamServer
 from ssl import SSLContext
 from subprocess import CalledProcessError, Popen
 from threading import Thread
 from time import sleep
+from traceback import format_exc
 from typing import Any, Callable, Dict, List, Optional
 from urllib.request import urlopen
 
+from telepresence import TELEPRESENCE_BINARY
 from telepresence.runner import Runner
 from telepresence.utilities import str_command
 
-__version__ = "<dev>"
+__version__ = "dev-version"
 __api__ = 1
 
 
@@ -75,7 +79,7 @@ def loop_in_background(
 def notify(runner: Runner, message: str, details="") -> None:
     runner.write(message)
     assert '"' not in message, message
-    my_name = "(PlaypenD)"
+    my_name = "(Playpen Daemon)"
     script = f'display notification "{{}}" with title "{message}"'
     if details:
         script += f" subtitle {my_name}"
@@ -126,7 +130,8 @@ def run_as_user_async(runner: Runner, args: List[str], cluster=None) -> Popen:
 
 # teleproxy
 
-teleproxy = "/Users/ark3/datawire/ambassador/venv/bin/teleproxy"
+# Replaced in main(...)
+teleproxy = ""
 
 
 def nuke_dns_cache(runner: Runner) -> None:
@@ -210,22 +215,30 @@ def perform_checks(runner: Runner) -> None:
     check_cluster(runner)
 
 
-# PlaypenD server
+# Playpen Daemon socket server
 
 
-class PlaypenDServer(ThreadingUnixStreamServer):
+class PlaypenServer(ThreadingUnixStreamServer):
     def server_activate(self):
         os.chmod(self.server_address, 0o777)
         super().server_activate()
 
 
-class PlaypenDRequestHandler(BaseRequestHandler):
+class PlaypenRequestHandler(BaseRequestHandler):
     def setup(self):
         self.runner = self.server.runner  # type: Runner
+        self.send_ok = True
 
     def send(self, line: str) -> None:
+        if not self.send_ok:
+            return
+
         message = (line.rstrip() + "\n").encode("utf8")
-        self.request.sendall(message)
+        try:
+            self.request.sendall(message)
+        except OSError as exc:
+            self.runner.write(f"Request error: Send failed: {exc}")
+            self.send_ok = False
 
     def fail(self, message: str) -> int:
         self.send(f"playpen: {message}")
@@ -261,6 +274,7 @@ class PlaypenDRequestHandler(BaseRequestHandler):
         except AttributeError:
             raise ValueError(f"unknown command: {command}")
 
+        self.runner.write(f"Request: {command}")
         return req
 
     def call_method(self):
@@ -268,24 +282,22 @@ class PlaypenDRequestHandler(BaseRequestHandler):
             req = self.parse_request()
         except ValueError as exc:
             message = str(exc)
-            self.write(f"Request failed: {message}")
+            self.runner.write(f"Request failed: {message}")
             return self.fail(str(exc))
         return req["method"](req)
 
     def handle(self):
-        saved_exc = None
         try:
             code = self.call_method()
         except Exception as exc:
-            saved_exc = exc
+            self.runner.write(f"CRASH: {exc}")
+            self.runner.write(format_exc())
             self.send(f"Internal server error: {exc}")
             code = 255
         self.send(f"-- exit {code}")
-        if saved_exc is not None:
-            raise saved_exc
 
     def version(self, req) -> int:
-        self.send(f"PlaypenD {__version__}")
+        self.send(f"Playpen Daemon {__version__}")
         return 0
 
     def status(self, req) -> int:
@@ -359,12 +371,24 @@ def main():
     if os.geteuid() != 0:
         exit("Playpen Daemon must run as root.")
 
-    runner = Runner("-", None, True)
     sockname = "/var/run/playpen.socket"
+    test_sock = socket.socket(socket.AF_UNIX)
+    try:
+        test_sock.connect(sockname)
+    except FileNotFoundError:
+        pass
+    else:
+        exit("It appears that Playpen Daemon is already running.")
+
+    runner = Runner("-", None, True)
     runner.add_cleanup("remove socket", os.unlink, sockname)
-    PlaypenDRequestHandler.show = runner.show
-    PlaypenDRequestHandler.write = runner.write
-    PlaypenDRequestHandler.runner = runner
+    PlaypenRequestHandler.runner = runner
+
+    global teleproxy
+    my_dir = Path(TELEPRESENCE_BINARY).parent
+    proxy_name = f"teleproxy-{runner.platform}-amd64"
+    teleproxy = str(my_dir / proxy_name)
+    runner.require([teleproxy], "Perhaps try reinstalling Playpen")
 
     with runner.cleanup_handling():
         # Intercept runs all the time
@@ -375,9 +399,9 @@ def main():
         loop_in_background(runner, "Periodic Status Checks", perform_checks)
 
         try:
-            with PlaypenDServer(sockname, PlaypenDRequestHandler) as server:
+            with PlaypenServer(sockname, PlaypenRequestHandler) as server:
                 server.runner = runner
-                runner.show("PlaypenD starting...")
+                runner.show("Playpen Daemon starting...")
                 server.serve_forever()
         except KeyboardInterrupt:
             runner.show("Interrupted.")
