@@ -1,4 +1,4 @@
-#!/Users/ark3/datawire/telepresence/virtualenv/bin/python3
+#!/usr/bin/env python3
 
 from getpass import getuser
 import json
@@ -6,8 +6,17 @@ import os
 import socket
 import sys
 
+__version__ = "dev-version"
+__api__ = 1
+
 
 def main():
+    try:
+        if sys.argv[1] == "version":
+            print(f"Playpen Client {__version__}")
+    except IndexError:
+        pass
+
     # Connect
     sock = socket.socket(socket.AF_UNIX)
     sockname = "/var/run/playpen.socket"
@@ -15,14 +24,14 @@ def main():
         sock.connect(sockname)
     except FileNotFoundError as exc:
         print(f"Connect to {sockname} failed: {exc}")
-        exit("playpen: Could not connect to PlaypenD. Is it running?")
+        exit("playpen: Could not connect to playpen daemon. Is it running?")
 
     # Send request
     request = dict(
         env=dict(os.environ),
         user=getuser(),
         args=sys.argv[1:],
-        api=1,
+        api=__api__,
     )
     out = sock.makefile(mode="w", buffering=1, encoding="utf8")
     json.dump(request, out, indent=2)
