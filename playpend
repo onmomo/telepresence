@@ -13,6 +13,9 @@ from urllib.request import urlopen
 from telepresence.runner import Runner
 from telepresence.utilities import str_command
 
+__version__ = "<dev>"
+__api__ = 1
+
 
 class State:
     @classmethod
@@ -228,25 +231,62 @@ class PlaypenDRequestHandler(BaseRequestHandler):
         self.send(f"playpen: {message}")
         return 1
 
-    def handle(self):
-        in_file = self.request.makefile("r")
-        req = json.load(in_file)
-        in_file.close()
+    def parse_request(self):
+        try:
+            in_file = self.request.makefile("r")
+            req = json.load(in_file)
+            in_file.close()
+        except ValueError as exc:
+            raise ValueError(f"Client JSON error: {exc}")
 
-        args = req.get("args", [])
+        try:
+            client_api = req["api"]
+            args = req["args"]
+        except KeyError as exc:
+            raise ValueError(f"Client failure (missing {exc.args[0]})")
+
+        if client_api != __api__:
+            self.version(req)
+            raise ValueError(
+                f"API mismatch: server v{__api__}, client v{client_api}"
+            )
+
         if args:
             command = args[0]
         else:
             command = "status"
-        self.runner.write(f"Request: {command}")
 
         try:
-            method = getattr(self, command)
+            req["method"] = getattr(self, command)
         except AttributeError:
-            code = self.fail(f"unknown command: {command}")
-        else:
-            code = method(req)
+            raise ValueError(f"unknown command: {command}")
+
+        return req
+
+    def call_method(self):
+        try:
+            req = self.parse_request()
+        except ValueError as exc:
+            message = str(exc)
+            self.write(f"Request failed: {message}")
+            return self.fail(str(exc))
+        return req["method"](req)
+
+    def handle(self):
+        saved_exc = None
+        try:
+            code = self.call_method()
+        except Exception as exc:
+            saved_exc = exc
+            self.send(f"Internal server error: {exc}")
+            code = 255
         self.send(f"-- exit {code}")
+        if saved_exc is not None:
+            raise saved_exc
+
+    def version(self, req) -> int:
+        self.send(f"PlaypenD {__version__}")
+        return 0
 
     def status(self, req) -> int:
         if not State.network_ok:

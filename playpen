@@ -18,7 +18,12 @@ def main():
         exit("playpen: Could not connect to PlaypenD. Is it running?")
 
     # Send request
-    request = dict(env=dict(os.environ), user=getuser(), args=sys.argv[1:])
+    request = dict(
+        env=dict(os.environ),
+        user=getuser(),
+        args=sys.argv[1:],
+        api=1,
+    )
     out = sock.makefile(mode="w", buffering=1, encoding="utf8")
     json.dump(request, out, indent=2)
     out.close()
