@@ -5,6 +5,7 @@ import json
 import os
 import socket
 from pathlib import Path
+from signal import SIGTERM
 from socketserver import BaseRequestHandler, ThreadingUnixStreamServer
 from ssl import SSLContext
 from subprocess import CalledProcessError, Popen
@@ -312,6 +313,11 @@ class PlaypenRequestHandler(BaseRequestHandler):
 
     def version(self, req) -> int:
         self.send(f"Playpen Daemon {__version__}")
+        return 0
+
+    def quit(self, req) -> int:
+        self.send("Playpen Daemon quitting...")
+        os.kill(os.getpid(), SIGTERM)
         return 0
 
     def status(self, req) -> int:
