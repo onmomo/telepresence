@@ -224,6 +224,16 @@ def check_cluster(runner: Runner) -> bool:
     return curr
 
 
+def disconnect_cluster(runner: Runner) -> None:
+    """Disconnect from the cluster in an idempotent way"""
+    # FIXME: Disconnect all intercepts
+    if State.bridge_process is not None:
+        State.bridge_process.terminate()
+        State.bridge_process = None
+    State.cluster_info = None
+    check_cluster(runner)
+
+
 def perform_checks(runner: Runner) -> None:
     check_teleproxy_intercept(runner)
     check_teleproxy_bridge(runner)
@@ -374,15 +384,9 @@ class PlaypenRequestHandler(BaseRequestHandler):
         return 0
 
     def disconnect(self, req) -> int:
-        assert self.runner is not None
         if State.cluster_info is None:
             return self.fail("Not connected")
-        # FIXME: Disconnect all intercepts
-        if State.bridge_process is not None:
-            State.bridge_process.terminate()
-            State.bridge_process = None
-        State.cluster_info = None
-        check_cluster(self.runner)
+        disconnect_cluster(self.runner)
         self.send("Disconnected")
         return 0
 
@@ -411,6 +415,7 @@ def main():
     runner.add_cleanup(
         "kill teleproxy intercept", kill_teleproxy_intercept, runner
     )
+    runner.add_cleanup("disconnect from cluster", disconnect_cluster, runner)
     PlaypenRequestHandler.runner = runner
 
     global teleproxy
