@@ -9,7 +9,7 @@ from socketserver import BaseRequestHandler, ThreadingUnixStreamServer
 from ssl import SSLContext
 from subprocess import CalledProcessError, Popen
 from threading import Thread
-from time import sleep
+from time import sleep, strftime
 from traceback import format_exc
 from typing import Any, Callable, Dict, List, Optional
 from urllib.request import urlopen
@@ -127,6 +127,10 @@ def run_as_user_async(runner: Runner, args: List[str], cluster=None) -> Popen:
     name = f"{args[0]} as user"
     process = runner.launch(name, sudo_cmd + args, is_critical=False, env=env)
     return process
+
+
+def mark_log_time(runner: Runner) -> None:
+    runner.write(strftime("Checkpoint %Y-%m-%d %H:%M:%S"))
 
 
 # teleproxy
@@ -387,7 +391,7 @@ def main():
     else:
         exit("It appears that Playpen Daemon is already running.")
 
-    runner = Runner("-", None, True)
+    runner = Runner("/tmp/playpen.log", None, True)
     runner.add_cleanup("remove socket", os.unlink, sockname)
     PlaypenRequestHandler.runner = runner
 
@@ -398,6 +402,10 @@ def main():
     runner.require([teleproxy], "Perhaps try reinstalling Playpen")
 
     with runner.cleanup_handling():
+        # Make the logs easier to scroll through
+        loop_in_background(
+            runner, "Logging checkpoints", mark_log_time, break_time=300
+        )
         # Intercept runs all the time
         loop_in_background(
             runner, "Teleproxy Intercept", launch_teleproxy_intercept
