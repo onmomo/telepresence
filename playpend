@@ -1,5 +1,6 @@
 #!/Users/ark3/datawire/telepresence/virtualenv/bin/python3
 
+import argparse
 import json
 import os
 import socket
@@ -368,6 +369,12 @@ class PlaypenRequestHandler(BaseRequestHandler):
 
 
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--version", action="version", version=f"Playpen Daemon {__version__}"
+    )
+    parser.parse_args()
+
     if os.geteuid() != 0:
         exit("Playpen Daemon must run as root.")
 
