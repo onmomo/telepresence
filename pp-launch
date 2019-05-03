@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Launch the Playpen Daemon in the background
+
+set -o errexit
+set -o pipefail
+set -o nounset
+#set -o xtrace
+
+cd "${BASH_SOURCE%/*}" > /dev/null
+echo "Launching $(./playpend --version) using sudo..."
+sudo echo -n
+( sudo ./playpend > /dev/null 2>&1 & )
+echo "Launched! See /tmp/playpen.log for diagnostics."

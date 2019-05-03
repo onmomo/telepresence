@@ -35,6 +35,7 @@ python3 -m zipapp -o "${DIST}/playpend" -p "/usr/bin/env python3" -c "${BLDDIR}/
 echo "Building Playpen client..."
 sed "s/dev-version/${VERSION}/" < "${SRCDIR}/playpen" > "${DIST}/playpen"
 chmod 755 "${DIST}/playpen"
+cp "${SRCDIR}/pp-launch" "${DIST}/pp-launch"
 
 echo "Zipping up the distribution..."
 RESULT="${DIST}/playpen-${VERSION}.zip"

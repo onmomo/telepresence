@@ -24,7 +24,10 @@ def main():
         sock.connect(sockname)
     except FileNotFoundError as exc:
         print(f"Connect to {sockname} failed: {exc}")
-        exit("playpen: Could not connect to playpen daemon. Is it running?")
+        print("\nThe server doesn't appear to be running.")
+        print("Take a look at /tmp/playpen.log for more information.")
+        print("You can start the server using pp-launch.\n")
+        exit("playpen: Could not connect to server")
 
     # Send request
     request = dict(
