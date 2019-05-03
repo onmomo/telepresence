@@ -40,7 +40,7 @@ cp "${SRCDIR}/pp-launch" "${DIST}/pp-launch"
 echo "Zipping up the distribution..."
 RESULT="${DIST}/playpen-${VERSION}.zip"
 rm -f "${RESULT}"
-(cd "${DIST}" && zip -q6 "playpen-${VERSION}.zip" playpen playpend pp-teleproxy-*-amd64)
+(cd "${DIST}" && zip -q6 "playpen-${VERSION}.zip" playpen playpend pp-launch pp-teleproxy-*-amd64)
 
 echo "Done."
 wc -c "${RESULT}"
