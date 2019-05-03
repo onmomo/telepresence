@@ -66,11 +66,11 @@ def loop_in_background(
     def loop():
         runner.write(f"Background thread {name} starting...")
         try:
-            while True:
+            while not runner.quitting:
                 function(runner, *(more_args if more_args is not None else []))
                 sleep(break_time)
         finally:
-            runner.write(f"FAIULRE: {name} thread ending!")
+            runner.write(f"FAILURE: {name} thread ending!")
 
     th = Thread(target=loop, daemon=True)
     th.start()
@@ -153,6 +153,15 @@ def launch_teleproxy_intercept(runner: Runner) -> None:
         runner.check_call([teleproxy, "-mode", "intercept"])
     except CalledProcessError:
         pass
+
+
+def kill_teleproxy_intercept(runner: Runner) -> None:
+    try:
+        with urlopen("http://127.254.254.254/api/shutdown", timeout=2.0) as fd:
+            fd.read()
+        sleep(0.75)
+    except OSError as exc:
+        runner.write(f"Intercept kill failed: {exc}")
 
 
 def check_teleproxy_intercept(runner: Runner) -> bool:
@@ -393,6 +402,9 @@ def main():
 
     runner = Runner("/tmp/playpen.log", None, True)
     runner.add_cleanup("remove socket", os.unlink, sockname)
+    runner.add_cleanup(
+        "kill teleproxy intercept", kill_teleproxy_intercept, runner
+    )
     PlaypenRequestHandler.runner = runner
 
     global teleproxy
