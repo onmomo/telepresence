@@ -63,6 +63,23 @@ $ tail -3 /tmp/playpen.log
 $ playpen
 Not connected
 
+$ dist/playpen -h
+playpen: usage: playpen [-h] COMMAND ...
+
+positional arguments:
+  COMMAND
+    version   Show client and server versions
+    quit      Have the server quit (for upgrades)
+    status    Show connectivity status
+    connect   Connect to a cluster
+    disconnect
+              Disconnect from the connected cluster
+
+optional arguments:
+  -h, --help  show this help message and exit
+
+See also https://github.com/telepresenceio/telepresence/blob/playpen/readme-playpen.md
+
 $ playpen version
 Playpen Client 15-g87bce02
 Playpen Daemon 15-g87bce02
