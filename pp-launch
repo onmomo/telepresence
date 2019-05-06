@@ -8,6 +8,12 @@ set -o nounset
 #set -o xtrace
 
 cd "${BASH_SOURCE%/*}" > /dev/null
+
+if ./playpen > /dev/null 2>&1 ; then
+    echo "Is Playpen Daemon already running?"
+    exit 1
+fi
+
 echo "Launching $(./playpend --version) using sudo..."
 sudo echo -n
 ( sudo ./playpend > /dev/null 2>&1 & )
