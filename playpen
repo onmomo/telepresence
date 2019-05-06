@@ -13,7 +13,7 @@ __api__ = 1
 def main():
     try:
         if sys.argv[1] == "version":
-            print(f"Playpen Client {__version__}")
+            print(f"Playpen Client v{__version__} (api v{__api__})")
     except IndexError:
         pass
 

@@ -322,7 +322,7 @@ class PlaypenRequestHandler(BaseRequestHandler):
         self.send(f"-- exit {code}")
 
     def version(self, req) -> int:
-        self.send(f"Playpen Daemon {__version__}")
+        self.send(f"Playpen Daemon v{__version__} (api v{__api__})")
         return 0
 
     def quit(self, req) -> int:
