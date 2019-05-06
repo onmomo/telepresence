@@ -249,6 +249,24 @@ class PlaypenServer(ThreadingUnixStreamServer):
         super().server_activate()
 
 
+class ParserError(Exception):
+    pass
+
+
+class Parser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._collected_output = ""
+
+    def _print_message(self, message, file=None):
+        if message:
+            self._collected_output += message
+
+    def exit(self, status=0, message=None):
+        self._print_message(message)
+        raise ParserError(self._collected_output)
+
+
 class PlaypenRequestHandler(BaseRequestHandler):
     def setup(self):
         self.runner = self.server.runner  # type: Runner
@@ -268,6 +286,21 @@ class PlaypenRequestHandler(BaseRequestHandler):
     def fail(self, message: str) -> int:
         self.send(f"playpen: {message}")
         return 1
+
+    def parse_client_args(self, args: List[str]) -> str:
+        doc_url = "https://github.com/telepresenceio/telepresence/blob/playpen/readme-playpen.md"
+        parser = Parser(prog="playpen", epilog=f"See also {doc_url}")
+        subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+        sap = subparsers.add_parser
+        _ = sap("version", help="Show client and server versions")
+        _ = sap("quit", help="Have the server quit (for upgrades)")
+        _ = sap("status", help="Show connectivity status")
+        _ = sap("connect", help="Connect to a cluster")
+        _ = sap("disconnect", help="Disconnect from the connected cluster")
+        ns = parser.parse_args(args)
+        if ns.command is None:
+            ns.command = "status"
+        return ns.command
 
     def parse_request(self):
         try:
@@ -289,10 +322,7 @@ class PlaypenRequestHandler(BaseRequestHandler):
                 f"API mismatch: server v{__api__}, client v{client_api}"
             )
 
-        if args:
-            command = args[0]
-        else:
-            command = "status"
+        command = self.parse_client_args(args)
 
         try:
             req["method"] = getattr(self, command)
@@ -306,8 +336,9 @@ class PlaypenRequestHandler(BaseRequestHandler):
         try:
             req = self.parse_request()
         except ValueError as exc:
-            message = str(exc)
-            self.runner.write(f"Request failed: {message}")
+            self.runner.write(f"Request failed: {str(exc)}")
+            return self.fail(str(exc))
+        except ParserError as exc:
             return self.fail(str(exc))
         return req["method"](req)
 
