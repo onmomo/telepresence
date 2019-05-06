@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import socket
+import unicodedata
 from pathlib import Path
 from signal import SIGTERM
 from socketserver import BaseRequestHandler, ThreadingUnixStreamServer
@@ -78,19 +79,20 @@ def loop_in_background(
     return th
 
 
-def notify(runner: Runner, message: str, details="") -> None:
+def notify(runner: Runner, message: str) -> None:
     runner.write(message)
     assert '"' not in message, message
+    message = message.replace("-->", unicodedata.lookup("RIGHTWARDS ARROW"))
     my_name = "(Playpen Daemon)"
-    script = f'display notification "{{}}" with title "{message}"'
-    if details:
-        script += f" subtitle {my_name}"
-        script = script.format(details)
-        runner.write(details)
-    else:
-        script = script.format(my_name)
     if runner.platform == "darwin":
-        runner.check_call(["osascript", "-e", script])
+        script = f'display notification "{my_name}" with title "{message}"'
+        command = ["osascript", "-e", script]
+    else:
+        command = ["notify-send", "--app-name=Playpen", message, my_name]
+    try:
+        runner.check_call(command)
+    except (CalledProcessError, OSError):
+        pass  # Already logged by Runner library
 
 
 def update_maybe_notify(runner: Runner, attrib: str, curr_value: Any) -> bool:
