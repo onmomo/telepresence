@@ -12,7 +12,7 @@ You can get a copy of the distribution ZIP file from Abhay.
 Unzip the distribution somewhere in your shell path. I use `~/datawire/bin` in my example but `/usr/local/bin` should be fine too.
 
 ```console
-$ unzip -l ~/Downloads/playpen-15-g87bce02.zip 
+$ unzip -l ~/Downloads/playpen-15-g87bce02.zip
 Archive:  /Users/ark3/Downloads/playpen-15-g87bce02.zip
   Length      Date    Time    Name
 ---------  ---------- -----   ----
@@ -52,7 +52,7 @@ playpen: Could not connect to server
 
 $ pp-launch
 Launching Playpen Daemon 15-g87bce02 using sudo...
-[sudo ark3@timonium] Password: 
+[sudo ark3@timonium] Password:
 Launched! See /tmp/playpen.log for diagnostics.
 
 $ tail -3 /tmp/playpen.log
@@ -86,6 +86,8 @@ See the [Target UX section](#target-ux) below for further examples of how to use
 ### Quit
 
 The only reason to quit the Playpen Daemon is to upgrade it, which you'll probably be doing often as I fix all the bugs you report.
+
+Okay, that was a lie. Because Playpen Daemon uses Telepresence machinery for logging, the logfile (`/tmp/playpen.log`) will grow without bound. And because Teleproxy logs very verbosely, the logfile will grow quickly. It's probably a good idea to kill and restart Playpen Daemon every day.
 
 ```console
 $ playpen status
