@@ -7,7 +7,7 @@ set -o pipefail
 set -o nounset
 #set -o xtrace
 
-TELEPROXY_VERSION=0.4.6
+TELEPROXY_VERSION=0.4.11
 
 SRCDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DIST="${SRCDIR}/dist"
